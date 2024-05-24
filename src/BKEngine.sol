@@ -57,6 +57,7 @@ contract BKEngine is ReentrancyGuard {
     error BKEngine__NotAllowedToken();
     error BKEngine__TransferFailed();
     error BKEngine__WeakHealthFactor(uint256 healthFactor);
+    error BKEngine__MintFailed();
 
     /////////////////////////
     // State variables    ///
@@ -73,7 +74,7 @@ contract BKEngine is ReentrancyGuard {
     mapping(address user => uint256 amountBkcMinted) private _sBkcMinted;
 
     address[] private _sCollateralTokens;
-    BKCoin private immutable _iDsc;
+    BKCoin private immutable _iBkc;
 
     ///////////////////
     // Events       ///
@@ -119,7 +120,7 @@ contract BKEngine is ReentrancyGuard {
             _sCollateralTokens.push(tokenAddress[i]);
         }
 
-        _iDsc = BKCoin(bkcAddress);
+        _iBkc = BKCoin(bkcAddress);
     }
 
     ////////////////////////////
@@ -177,6 +178,12 @@ contract BKEngine is ReentrancyGuard {
 
         // If minted too much, revert changes
         _revertIfHealthFactorIsBroken(msg.sender);
+
+        bool minted = _iBkc.mint(msg.sender, amountBkc);
+
+        if(!minted){
+            revert BKEngine__MintFailed();
+        }
     }
 
     function burnBKC() external {}
