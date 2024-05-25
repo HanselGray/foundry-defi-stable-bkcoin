@@ -34,9 +34,29 @@ contract BKEngineTest is Test {
 
         ERC20Mock(_weth).mint(USER, STARTING_ERC20_BALANCE);
     }
-    ///////////////////////////
-    /// Price feed tests /////
+
+
+
+      ///////////////////////////
+     /// Price feed tests /////
     /////////////////////////
+
+    address[] public tokenAddress;
+    address[] public priceFeedAddress;
+
+    function testRevertsIFTokenLengthDoesntMatchPriceFeeds() public {
+        tokenAddress.push(_weth);
+        priceFeedAddress.push(_ethUsdPriceFeed);
+        priceFeedAddress.push(_btcUsdPriceFeed);
+        
+        vm.expectRevert(BKEngine.BKEngine__TokenAddressAndPriceFeedAddressMustBeSameLength.selector);
+        new BKEngine(tokenAddress, priceFeedAddress, address(_bkc));
+    }
+
+      /////////////////////////
+     /// Price feed tests ////
+    /////////////////////////
+
     function testGetUsdValue() public{
         uint256 ethAmount = 15e18;
         // Since we set ETH price to be at 2000/ETH => 15e18* 2000 = 30000e18 = 3e22;
@@ -45,10 +65,14 @@ contract BKEngineTest is Test {
         assertEq(expectedUsd, actualUsd);
     }
 
+    function testgetTokenAmountFromUsd() public {
+        
+    }
+
+
       /////////////////////////////////
      /// deposit Collateral tests ////
     /////////////////////////////////
-
 
     function testRevertsIfCollateralZero() public{
         vm.startPrank(USER);
