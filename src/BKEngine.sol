@@ -58,14 +58,17 @@ contract BKEngine is ReentrancyGuard {
     error BKEngine__TransferFailed();
     error BKEngine__WeakHealthFactor(uint256 healthFactor);
     error BKEngine__MintFailed();
+    error BKEngine__GoodHealthFactor();
+    error BKEngine__HealthFactorNotImproved();
 
     /////////////////////////
     // State variables    ///
     /////////////////////////
     uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;
     uint256 private constant PRECISION = 1e18;
-    uint256 private constant LIQUIDATION_THRESHOLD= 150;
+    uint256 private constant LIQUIDATION_THRESHOLD = 150;
     uint256 private constant LIQUIDATION_PRECISION = 100;
+    uint256 private constant LIQUIDATION_BONUS = 10;
     uint256 private constant MIN_HEALTH_FACTOR = 1;
 
     mapping(address token => address priceFeed) private _sPriceFeeds;
@@ -83,6 +86,13 @@ contract BKEngine is ReentrancyGuard {
         address indexed user,
         address indexed token,
         uint256 indexed amount
+    );
+    event CollateralRedeemed(
+        address indexed from,
+        address indexed to,
+        address indexed user,
+        address indexed token,
+        address indexed amount
     );
 
     ///////////////////
@@ -127,7 +137,34 @@ contract BKEngine is ReentrancyGuard {
     // External functions    ///
     ////////////////////////////
 
-    function depositCollateralAndMintBKC() external {}
+    function getTokenAmountFromUsd(
+        address token,
+        uint256 usdAmountInWei
+    ) public view returns (uint256) {
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(
+            _sPriceFeeds[token]
+        );
+        (, int256 price, , , ) = priceFeed.latestRoundData();
+        return
+            (usdAmountInWei * PRECISION) /
+            (uint256(price) * ADDITIONAL_FEED_PRECISION); // MAKING SURE THINGS ALLIGN WITH THE PRECISION HERE
+    }
+
+    /**
+     * @param tokenCollateralAddress: Address of token to deposit as collateral
+     * @param amountCollateral: Amount of collateral to deposit, should be more than zero
+     * @param amountBKC: Amount of BKC to mint
+     * @notice This will deposit and mint collateral in one transaction
+     */
+
+    function depositCollateralAndMintBKC(
+        address tokenCollateralAddress,
+        uint256 amountCollateral,
+        uint256 amountBKC
+    ) external {
+        depositCollateral(tokenCollateralAddress, amountCollateral);
+        mintBKC(amountBKC);
+    }
 
     /**
      * @notice follows CEI: Checks -> Effects -> Interactions
@@ -162,9 +199,39 @@ contract BKEngine is ReentrancyGuard {
         }
     }
 
-    function retrieveCollateralForBKC() external {}
+    /**
+     * @param tokenCollateralAddress Address of collateral to redeem,
+     * @param amountCollateral Amount of collateral to redeem
+     * @param amountBkcToBurn Amount of BKC to burn **NOTE: This should be equal to the amount
+     of Collateral retrieve times a certain coefficient.
+     */
+    function retrieveCollateralForBKC(
+        address tokenCollateralAddress,
+        uint256 amountCollateral,
+        uint256 amountBkcToBurn
+    ) external {
+        burnBKC(amountBkcToBurn);
+        retrieveCollateral(tokenCollateralAddress, amountCollateral);
+        // redeemCollateral already checks health factor
+    }
 
-    function retrieveCollateral() external {}
+    function retrieveCollateral(
+        address tokenCollateralAddress,
+        uint256 amountCollateral
+    )
+        external
+        moreThanZero(amountCollateral)
+        nonReentrant
+        isAllowedToken(tokenCollateralAddress)
+    {
+        _redeemCollateral(
+            msg.sender,
+            msg.sender,
+            tokenCollateralAddress,
+            amountCollateral
+        );
+        revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     /**
      * @notice follows CEI: Checks -> Effects -> Interactions
@@ -181,20 +248,109 @@ contract BKEngine is ReentrancyGuard {
 
         bool minted = _iBkc.mint(msg.sender, amountBkc);
 
-        if(!minted){
+        if (!minted) {
             revert BKEngine__MintFailed();
         }
     }
 
-    function burnBKC() external {}
+    /**
+     * @param amount: amount of Bkc to burn
+     * @param
+     */
+    function burnBKC(uint256 amount) public moreThanZero(amount) nonReentrant {
+        _burnBKC(msg.sender, msg.sender, amount);
+        _revertIfHealthFactorIsBroken(msg.sender); // Just for safety, very unlikely would happen,
+    }
 
-    function liquidate() external {}
+    /**
+     * Follows CEI: Checks -> Effects -> Interactions
+     */
+    function liquidate(
+        address user,
+        address tokenCollateralAddress,
+        uint256 debtToCover
+    ) external moreThanZero(debtToCover) nonReentrant {
+        uint256 startingUserHealthFactor = _healthFactor(user);
+        if (startingUserHealthFactor >= MIN_HEALTH_FACTOR) {
+            revert BKEngine__GoodHealthFactor();
+        }
+
+        // Burn BKC "debt" and take collateral from user
+        // Example bad user: $140 ETH, $100 BKC -> debtToCover = $100
+        uint256 tokenAmountFromDebtCovered = getTokenAmountFromUsd(
+            collateral,
+            debtToCover
+        );
+
+        uint256 bonusCollateral = (tokenAmountFromDebtCovered *
+            LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
+
+        uint256 totalCollateralToRedeem = tokenAmountFromDebtCovered +
+            bonusCollateral;
+
+        _retrieveCollateral(
+            user,
+            msg.sender,
+            tokenCollateralAddress,
+            totalCollateralToRedeem
+        );
+
+        _burnBKC(user, msg.sender, debtToCover);
+
+        uint256 endingUserHealthFactor = _healthFactor(user);
+        if (endingUserHealthFactor <= startingUserHealthFactor) {
+            revert BKEngine__HealthFactorNotImproved();
+        }
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     function healthCheck() external view {}
 
     ////////////////////////////////////////
     // Private and Internal functions    ///
     ////////////////////////////////////////
+
+    function _retrieveCollateral(
+        address from,
+        address to,
+        address tokenCollateralAddress,
+        uint256 amountCollateral
+    ) private moreThanZero(amountCollateral) nonReentrant {
+        _sCollateralDeposited[from][tokenCollateralAddress] -= amountCollateral;
+        emit CollateralRedeemed(
+            from,
+            to,
+            tokenCollateralAddress,
+            amountCollateral
+        );
+
+        bool success = IERC20(tokenCollateralAddress).transfer(
+            to,
+            amountCollateral
+        );
+        if (!success) {
+            revert BKEngine__TransferFailed();
+        }
+        _revertIfHealthFactorIsBroken(from);
+    }
+
+    /**
+     * @notice Low-level function, DO NOT CALL except after performing health checks
+     */
+    function _burnBKC(
+        address onBehalfOf,
+        address bkcFrom,
+        uint256 amount
+    ) private moreThanZero(amount) nonReentrant {
+        _sBkcMinted[onBehalfOf] -= amount;
+        bool success = _iBkc.transferFrom(bkcFrom, address(this), amount);
+        if (!success) {
+            revert BKEngine__TransferFailed();
+        }
+        _iBkc.burn(amount);
+
+        _revertIfHealthFactorIsBroken(msg.sender); // Just for safety, very unlikely would happen,
+    }
 
     function _getAccountInformation(
         address user
@@ -217,7 +373,8 @@ contract BKEngine is ReentrancyGuard {
             uint256 totalCollateralValue
         ) = _getAccountInformation(user);
 
-        uint256 collateralThresholdFloor = (totalBkcMinted * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+        uint256 collateralThresholdFloor = (totalBkcMinted *
+            LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
 
         // Example
         // total collat value = 1000usd ETH
@@ -226,7 +383,6 @@ contract BKEngine is ReentrancyGuard {
         // healthFactor = (1000 / 1200) < 1 => UNDER-COLLATERALIZED, can be liquidate
 
         return (totalCollateralValue * PRECISION) / collateralThresholdFloor;
-        
     }
 
     /*
@@ -235,7 +391,7 @@ contract BKEngine is ReentrancyGuard {
      */
     function _revertIfHealthFactorIsBroken(address user) internal view {
         uint256 userHealthFactor = _healthFactor(user);
-        if(userHealthFactor < MIN_HEALTH_FACTOR) {
+        if (userHealthFactor < MIN_HEALTH_FACTOR) {
             revert BKEngine__WeakHealthFactor(userHealthFactor);
         }
     }
