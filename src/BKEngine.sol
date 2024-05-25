@@ -86,7 +86,7 @@ contract BKEngine is ReentrancyGuard {
     address[] private _sCollateralTokens;
     BKCoin private immutable _iBkc;
 
-    
+
 
       ///////////////////
      // Events       ///
@@ -103,6 +103,8 @@ contract BKEngine is ReentrancyGuard {
         address indexed token,
         uint256 amount
     );
+
+
 
     ///////////////////
     // Modifiers    ///
@@ -154,19 +156,6 @@ contract BKEngine is ReentrancyGuard {
     function burnBKC(uint256 amount) public moreThanZero(amount) nonReentrant {
         _burnBKC(msg.sender, msg.sender, amount);
         _revertIfHealthFactorIsBroken(msg.sender); // Just for safety, very unlikely would happen,
-    }
-
-    function getTokenAmountFromUsd(
-        address token,
-        uint256 usdAmountInWei
-    ) public view returns (uint256) {
-        AggregatorV3Interface priceFeed = AggregatorV3Interface(
-            _sPriceFeeds[token]
-        );
-        (, int256 price, , , ) = priceFeed.latestRoundData();
-        return
-            (usdAmountInWei * PRECISION) /
-            (uint256(price) * ADDITIONAL_FEED_PRECISION); // MAKING SURE THINGS ALLIGN WITH THE PRECISION HERE
     }
 
     /**
@@ -265,6 +254,19 @@ contract BKEngine is ReentrancyGuard {
      // Public functions  ///
     ////////////////////////
 
+    function getTokenAmountFromUsd(
+        address token,
+        uint256 usdAmountInWei
+    ) public view returns (uint256) {
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(
+            _sPriceFeeds[token]
+        );
+        (, int256 price, , , ) = priceFeed.latestRoundData();
+        return
+            (usdAmountInWei * PRECISION) /
+            (uint256(price) * ADDITIONAL_FEED_PRECISION); // MAKING SURE THINGS ALLIGN WITH THE PRECISION HERE
+    }
+
     /**
      * @notice follows CEI: Checks -> Effects -> Interactions
      * @param amountBkc: amount of BKC to mint
@@ -322,8 +324,8 @@ contract BKEngine is ReentrancyGuard {
 
 
 
-    ////////////////////////////////////////
-    // Private and Internal functions    ///
+      ////////////////////////////////////////
+     // Private and Internal functions    ///
     ////////////////////////////////////////
 
     function _retrieveCollateral(
