@@ -11,30 +11,29 @@ import {ERC20Mock} from "@openzeppelin/contracts/mocks/ERC20Mock.sol";
 
 
 contract BKEngineTest is Test {
-    DeployBKC deployer;
-    BKCoin bkc;
-    BKEngine bkce;
-    HelperConfig config;
+    DeployBKC _deployer;
+    BKCoin _bkc;
+    BKEngine _bkce;
+    HelperConfig _config;
 
-    address ethUsdPriceFeed;
-    address weth;
+    address _ethUsdPriceFeed;
+    address _weth;
 
-    address btcUsdPriceFeed;
-    address wbtc;
+    address _btcUsdPriceFeed;
+    address _wbtc;
 
     address public USER = makeAddr("user");
     uint256 public constant AMOUNT_COLLATERAL = 10 ether;
     uint256 public constant STARTING_ERC20_BALANCE = 100 ether;
     
     function setUp() public {
-        deployer = new DeployBKC();
-        (bkc, bkce, config) = deployer.run();
+        _deployer = new DeployBKC();
+        (_bkc, _bkce, _config) = _deployer.run();
 
-        (ethUsdPriceFeed,,weth,,) = config.activeNetworkConfig();
+        (_ethUsdPriceFeed,,_weth,,) = _config.activeNetworkConfig();
 
-        ERC20Mock(weth).mint(USER, STARTING_ERC20_BALANCE);
+        ERC20Mock(_weth).mint(USER, STARTING_ERC20_BALANCE);
     }
-
     ///////////////////////////
     /// Price feed tests /////
     /////////////////////////
@@ -42,7 +41,7 @@ contract BKEngineTest is Test {
         uint256 ethAmount = 15e18;
         // Since we set ETH price to be at 2000/ETH => 15e18* 2000 = 30000e18 = 3e22;
         uint256 expectedUsd = 30000e18;
-        uint256 actualUsd = bkce.getUsdValue(weth,ethAmount);
+        uint256 actualUsd = _bkce.getUsdValue(_weth,ethAmount);
         assertEq(expectedUsd, actualUsd);
     }
 
@@ -53,10 +52,11 @@ contract BKEngineTest is Test {
 
     function testRevertsIfCollateralZero() public{
         vm.startPrank(USER);
-        ERC20Mock(weth).approve(address(bkce), AMOUNT_COLLATERAL);
+        ERC20Mock(_weth).approve(address(_bkce), AMOUNT_COLLATERAL);
 
         vm.expectRevert(BKEngine.BKEngine__NonPostiveRejected.selector);
-        bkce.depositCollateral(weth, 0);
+        _bkce.depositCollateral(_weth, 0);
         vm.stopPrank();
     }
 }
+

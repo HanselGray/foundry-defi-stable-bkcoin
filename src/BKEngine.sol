@@ -29,6 +29,7 @@ import {BKCoin} from "./BKCoin.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+
 /**
  * @title BKEngine
  * @author Thoi Mo Senh Ca
@@ -49,9 +50,13 @@ import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/Ag
  */
 
 contract BKEngine is ReentrancyGuard {
+
+
+
+      ///////////////////
+     // Errors       ///
     ///////////////////
-    // Errors       ///
-    ///////////////////
+
     error BKEngine__NonPostiveRejected();
     error BKEngine__TokenAddressAndPriceFeedAddressMustBeSameLength();
     error BKEngine__NotAllowedToken();
@@ -61,9 +66,12 @@ contract BKEngine is ReentrancyGuard {
     error BKEngine__GoodHealthFactor();
     error BKEngine__HealthFactorNotImproved();
 
+
+
+      /////////////////////////
+     // State variables    ///
     /////////////////////////
-    // State variables    ///
-    /////////////////////////
+
     uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;
     uint256 private constant PRECISION = 1e18;
     uint256 private constant LIQUIDATION_THRESHOLD = 150;
@@ -72,16 +80,18 @@ contract BKEngine is ReentrancyGuard {
     uint256 private constant MIN_HEALTH_FACTOR = 1;
 
     mapping(address token => address priceFeed) private _sPriceFeeds;
-    mapping(address user => mapping(address token => uint256 amount))
-        private _sCollateralDeposited;
+    mapping(address user => mapping(address token => uint256 amount)) private _sCollateralDeposited;
     mapping(address user => uint256 amountBkcMinted) private _sBkcMinted;
 
     address[] private _sCollateralTokens;
     BKCoin private immutable _iBkc;
 
+    
+
+      ///////////////////
+     // Events       ///
     ///////////////////
-    // Events       ///
-    ///////////////////
+
     event CollateralDeposited(
         address indexed user,
         address indexed token,
@@ -90,9 +100,8 @@ contract BKEngine is ReentrancyGuard {
     event CollateralRedeemed(
         address indexed from,
         address indexed to,
-        address indexed user,
         address indexed token,
-        address indexed amount
+        uint256 amount
     );
 
     ///////////////////
@@ -112,8 +121,8 @@ contract BKEngine is ReentrancyGuard {
         _;
     }
 
-    ///////////////////
-    // Functions    ///
+      ///////////////////
+     // Functions    ///
     ///////////////////
 
     constructor(
@@ -133,9 +142,19 @@ contract BKEngine is ReentrancyGuard {
         _iBkc = BKCoin(bkcAddress);
     }
 
+
+
+      ////////////////////////////
+     // External functions    ///
     ////////////////////////////
-    // External functions    ///
-    ////////////////////////////
+
+    /**
+     * @param amount: amount of Bkc to burn
+     */
+    function burnBKC(uint256 amount) public moreThanZero(amount) nonReentrant {
+        _burnBKC(msg.sender, msg.sender, amount);
+        _revertIfHealthFactorIsBroken(msg.sender); // Just for safety, very unlikely would happen,
+    }
 
     function getTokenAmountFromUsd(
         address token,
@@ -167,39 +186,6 @@ contract BKEngine is ReentrancyGuard {
     }
 
     /**
-     * @notice follows CEI: Checks -> Effects -> Interactions
-     * @param tokenCollateralAddress: Address of token to deposit as collateral
-     * @param amountCollateral: Amount of collateral to deposit, should be more than zero
-     *
-     */
-    function depositCollateral(
-        address tokenCollateralAddress,
-        uint256 amountCollateral
-    )
-        external
-        moreThanZero(amountCollateral)
-        isAllowedToken(tokenCollateralAddress)
-        nonReentrant
-    {
-        _sCollateralDeposited[msg.sender][
-            tokenCollateralAddress
-        ] += amountCollateral;
-        emit CollateralDeposited(
-            msg.sender,
-            tokenCollateralAddress,
-            amountCollateral
-        );
-        bool success = IERC20(tokenCollateralAddress).transferFrom(
-            msg.sender,
-            address(this),
-            amountCollateral
-        );
-        if (!success) {
-            revert BKEngine__TransferFailed();
-        }
-    }
-
-    /**
      * @param tokenCollateralAddress Address of collateral to redeem,
      * @param amountCollateral Amount of collateral to redeem
      * @param amountBkcToBurn Amount of BKC to burn **NOTE: This should be equal to the amount
@@ -211,7 +197,7 @@ contract BKEngine is ReentrancyGuard {
         uint256 amountBkcToBurn
     ) external {
         burnBKC(amountBkcToBurn);
-        retrieveCollateral(tokenCollateralAddress, amountCollateral);
+        _retrieveCollateral(msg.sender,msg.sender, tokenCollateralAddress,amountCollateral);
         // redeemCollateral already checks health factor
     }
 
@@ -224,42 +210,13 @@ contract BKEngine is ReentrancyGuard {
         nonReentrant
         isAllowedToken(tokenCollateralAddress)
     {
-        _redeemCollateral(
+        _retrieveCollateral(
             msg.sender,
             msg.sender,
             tokenCollateralAddress,
             amountCollateral
         );
-        revertIfHealthFactorIsBroken(msg.sender);
-    }
-
-    /**
-     * @notice follows CEI: Checks -> Effects -> Interactions
-     * @param amountBkc: amount of BKC to mint
-     * @notice must follow the over-collateralized rule
-     */
-    function mintBKC(
-        uint256 amountBkc
-    ) external moreThanZero(amountBkc) nonReentrant {
-        _sBkcMinted[msg.sender] += amountBkc;
-
-        // If minted too much, revert changes
         _revertIfHealthFactorIsBroken(msg.sender);
-
-        bool minted = _iBkc.mint(msg.sender, amountBkc);
-
-        if (!minted) {
-            revert BKEngine__MintFailed();
-        }
-    }
-
-    /**
-     * @param amount: amount of Bkc to burn
-     * @param
-     */
-    function burnBKC(uint256 amount) public moreThanZero(amount) nonReentrant {
-        _burnBKC(msg.sender, msg.sender, amount);
-        _revertIfHealthFactorIsBroken(msg.sender); // Just for safety, very unlikely would happen,
     }
 
     /**
@@ -278,7 +235,7 @@ contract BKEngine is ReentrancyGuard {
         // Burn BKC "debt" and take collateral from user
         // Example bad user: $140 ETH, $100 BKC -> debtToCover = $100
         uint256 tokenAmountFromDebtCovered = getTokenAmountFromUsd(
-            collateral,
+            tokenCollateralAddress,
             debtToCover
         );
 
@@ -304,7 +261,66 @@ contract BKEngine is ReentrancyGuard {
         _revertIfHealthFactorIsBroken(msg.sender);
     }
 
+      //////////////////////// 
+     // Public functions  ///
+    ////////////////////////
+
+    /**
+     * @notice follows CEI: Checks -> Effects -> Interactions
+     * @param amountBkc: amount of BKC to mint
+     * @notice must follow the over-collateralized rule
+     */
+    function mintBKC(
+        uint256 amountBkc
+    ) public moreThanZero(amountBkc) nonReentrant {
+        _sBkcMinted[msg.sender] += amountBkc;
+
+        // If minted too much, revert changes
+        _revertIfHealthFactorIsBroken(msg.sender);
+
+        bool minted = _iBkc.mint(msg.sender, amountBkc);
+
+        if (!minted) {
+            revert BKEngine__MintFailed();
+        }
+    }
+
+    /**
+     * @notice follows CEI: Checks -> Effects -> Interactions
+     * @param tokenCollateralAddress: Address of token to deposit as collateral
+     * @param amountCollateral: Amount of collateral to deposit, should be more than zero
+     *
+     */
+    function depositCollateral(
+        address tokenCollateralAddress,
+        uint256 amountCollateral
+    )
+        public
+        moreThanZero(amountCollateral)
+        isAllowedToken(tokenCollateralAddress)
+        nonReentrant
+    {
+        _sCollateralDeposited[msg.sender][
+            tokenCollateralAddress
+        ] += amountCollateral;
+        emit CollateralDeposited(
+            msg.sender,
+            tokenCollateralAddress,
+            amountCollateral
+        );
+        bool success = IERC20(tokenCollateralAddress).transferFrom(
+            msg.sender,
+            address(this),
+            amountCollateral
+        );
+        if (!success) {
+            revert BKEngine__TransferFailed();
+        }
+    }
+
     function healthCheck() external view {}
+
+
 
     ////////////////////////////////////////
     // Private and Internal functions    ///
@@ -396,9 +412,12 @@ contract BKEngine is ReentrancyGuard {
         }
     }
 
+
+
+      ////////////////////////////////////////////
+     // Public and External view functions    ///
     ////////////////////////////////////////////
-    // Public and External view functions    ///
-    ////////////////////////////////////////////
+
     function getAccountCollateralValue(
         address user
     ) public view returns (uint256 totalCollateralInUsd) {
