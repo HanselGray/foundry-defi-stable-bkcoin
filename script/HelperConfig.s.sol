@@ -37,11 +37,11 @@ contract HelperConfig is Script {
                 wbtcUsdPriceFeed: 0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43,
                 weth: 0xdd13E55209Fd76AfE204dBda4007C227904f0a81,
                 wbtc: 0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063,
-                deployerKey: DEFAULT_ANVIL_KEY
+                deployerKey: vm.envUint("PRIVATE_KEY")
             });
     }
 
-    function getOrCreateAnvilEthConfig() public returns (NetworkConfig memory) {
+    function getOrCreateAnvilEthConfig() public returns (NetworkConfig memory anvilNetworkConfig) {
         if (activeNetworkConfig.wethUsdPriceFeed != address(0)) {
             return activeNetworkConfig;
         }
@@ -60,10 +60,10 @@ contract HelperConfig is Script {
 
         vm.stopBroadcast();
 
-        return NetworkConfig({
+        anvilNetworkConfig = NetworkConfig({
             wethUsdPriceFeed: address(ethUsdPriceFeed),
-            wbtcUsdPriceFeed: address(btcUsdPriceFeed),
             weth: address(wethMock),
+            wbtcUsdPriceFeed: address(btcUsdPriceFeed),
             wbtc: address(wbtcMock),
             deployerKey: DEFAULT_ANVIL_KEY
     });

@@ -8,8 +8,8 @@ import {BKEngine} from "../src/BKEngine.sol";
 import {HelperConfig} from "./HelperConfig.s.sol";
 
 contract DeployBKC is Script {
-    address[] public tokenAddresses;
-    address[] public priceFeedAddresses;
+    address[] public tokenAddress;
+    address[] public priceFeedAddress;
 
     function run() external returns (BKCoin, BKEngine, HelperConfig) {
         HelperConfig config = new HelperConfig();
@@ -21,15 +21,15 @@ contract DeployBKC is Script {
             uint256 deployerKey
         ) = config.activeNetworkConfig();
 
-        tokenAddresses = [weth, wbtc];
-        priceFeedAddresses = [wethUsdPriceFeed, wbtcUsdPriceFeed];
+        tokenAddress = [weth, wbtc];
+        priceFeedAddress = [wethUsdPriceFeed, wbtcUsdPriceFeed];
 
         vm.startBroadcast(deployerKey);
 
         BKCoin bkc = new BKCoin();
         BKEngine engine = new BKEngine(
-            tokenAddresses,
-            priceFeedAddresses,
+            tokenAddress,
+            priceFeedAddress,
             address(bkc)
         );
         bkc.transferOwnership(address(engine));

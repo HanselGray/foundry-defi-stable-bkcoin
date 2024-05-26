@@ -29,6 +29,7 @@ import {BKCoin} from "./BKCoin.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import {OracleLib} from "./libraries/OracleLib.sol";
 
 /**
  * @title BKEngine
@@ -56,31 +57,47 @@ contract BKEngine is ReentrancyGuard {
 
     error BKEngine__NonPostiveRejected();
     error BKEngine__TokenAddressAndPriceFeedAddressMustBeSameLength();
-    error BKEngine__NotAllowedToken();
+    error BKEngine__NotAllowedToken(address token);
     error BKEngine__TransferFailed();
     error BKEngine__WeakHealthFactor(uint256 healthFactor);
     error BKEngine__MintFailed();
     error BKEngine__GoodHealthFactor();
     error BKEngine__HealthFactorNotImproved();
 
+    ///////////////////
+    // Types      /////
+    ///////////////////
+
+    using OracleLib for AggregatorV3Interface;
+
     /////////////////////////
     // State variables    ///
     /////////////////////////
 
-    uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;
-    uint256 private constant PRECISION = 1e18;
+    BKCoin private immutable _iBkc;
+
     uint256 private constant LIQUIDATION_THRESHOLD = 150;
     uint256 private constant LIQUIDATION_PRECISION = 100;
     uint256 private constant LIQUIDATION_BONUS = 10;
-    uint256 private constant MIN_HEALTH_FACTOR = 1;
 
+    uint256 private constant MIN_HEALTH_FACTOR = 1e18;
+
+    uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;
+    uint256 private constant PRECISION = 1e18;
+
+    /// @dev Mapping of token address to price feed address
     mapping(address token => address priceFeed) private _sPriceFeeds;
+
+    /// @dev Amount of collateral deposited by user
     mapping(address user => mapping(address token => uint256 amount))
         private _sCollateralDeposited;
+
+    /// @dev Amount of BKC minted by an user
     mapping(address user => uint256 amountBkcMinted) private _sBkcMinted;
 
+    /// @dev If the types of collateral tokens our system accepts is a constant, this could be immutable.
+    /// @dev Not recommended to make this immutable cause we want to scale our system to accepts a wide and expanding variety of tokens
     address[] private _sCollateralTokens;
-    BKCoin private immutable _iBkc;
 
     ///////////////////
     // Events       ///
@@ -91,16 +108,19 @@ contract BKEngine is ReentrancyGuard {
         address indexed token,
         uint256 indexed amount
     );
+
     event CollateralRedeemed(
         address indexed from,
         address indexed to,
         address indexed token,
         uint256 amount
     );
+    /// @dev If redeemFrom != redeemedTo, then it was liquidated
 
     ///////////////////
     // Modifiers    ///
     ///////////////////
+
     modifier moreThanZero(uint256 amount) {
         if (amount == 0) {
             revert BKEngine__NonPostiveRejected();
@@ -110,7 +130,7 @@ contract BKEngine is ReentrancyGuard {
 
     modifier isAllowedToken(address token) {
         if (_sPriceFeeds[token] == address(0)) {
-            revert BKEngine__NotAllowedToken();
+            revert BKEngine__NotAllowedToken(token);
         }
         _;
     }
@@ -141,14 +161,6 @@ contract BKEngine is ReentrancyGuard {
     ////////////////////////////
 
     /**
-     * @param amount: amount of Bkc to burn
-     */
-    function burnBKC(uint256 amount) public moreThanZero(amount) nonReentrant {
-        _burnBKC(msg.sender, msg.sender, amount);
-        _revertIfHealthFactorIsBroken(msg.sender); // Just for safety, very unlikely would happen,
-    }
-
-    /**
      * @param tokenCollateralAddress: Address of token to deposit as collateral
      * @param amountCollateral: Amount of collateral to deposit, should be more than zero
      * @param amountBKC: Amount of BKC to mint
@@ -174,8 +186,12 @@ contract BKEngine is ReentrancyGuard {
         address tokenCollateralAddress,
         uint256 amountCollateral,
         uint256 amountBkcToBurn
-    ) external {
-        burnBKC(amountBkcToBurn);
+    )
+        external
+        moreThanZero(amountCollateral)
+        isAllowedToken(tokenCollateralAddress)
+    {
+        _burnBKC(msg.sender, msg.sender,amountBkcToBurn);
         _retrieveCollateral(
             msg.sender,
             msg.sender,
@@ -185,6 +201,12 @@ contract BKEngine is ReentrancyGuard {
         // redeemCollateral already checks health factor
     }
 
+    /** 
+     * @param tokenCollateralAddress: The ERC20 token address of the collateral you're redeeming
+     * @param amountCollateral: The amount of collateral you're redeeming
+     * @notice This function will redeem your collateral.
+     * @notice If you have DSC minted, you will not be able to redeem until you burn your DSC
+     */
     function retrieveCollateral(
         address tokenCollateralAddress,
         uint256 amountCollateral
@@ -200,11 +222,34 @@ contract BKEngine is ReentrancyGuard {
             tokenCollateralAddress,
             amountCollateral
         );
-        _revertIfHealthFactorIsBroken(msg.sender);
+        revertIfHealthFactorIsBroken(msg.sender);
+    }
+
+    /**
+     * @notice careful! You'll burn BKC here! Make sure you want to do this
+     * @dev you might want to use this if you want to just burn BKC in order to keep a good health factor
+     * @param amount: amount of Bkc to burn
+     */
+    function burnBKC(uint256 amount) public moreThanZero(amount) {
+        _burnBKC(msg.sender, msg.sender, amount);
+        revertIfHealthFactorIsBroken(msg.sender); // Just for safety, very unlikely would ever happen,
     }
 
     /**
      * Follows CEI: Checks -> Effects -> Interactions
+     * @param tokenCollateralAddress: The ERC20 token address of the collateral you're using to make the protocol solvent again.
+     * This is collateral that you're going to take from the user who is insolvent.
+     * In return, you have to burn your DSC to pay off their debt, but you don't pay off your own.
+     * @param user: The user who is insolvent. They have to have a _healthFactor below MIN_HEALTH_FACTOR
+     * @param debtToCover: The amount of DSC you want to burn to cover the user's debt.
+     *
+     * @notice You can partially liquidate a user.
+     * @notice You will get a 10% LIQUIDATION_BONUS for taking the users funds.
+     * @notice This function working assumes that the protocol will be roughly 150% overcollateralized in order for this 
+     * to work.
+     * @notice A known bug would be if the protocol was only 100% collateralized, we wouldn't be able to liquidate
+     * anyone.
+     * For example, if the price of the collateral plummeted before anyone could be liquidated.
      */
     function liquidate(
         address user,
@@ -239,14 +284,16 @@ contract BKEngine is ReentrancyGuard {
         _burnBKC(user, msg.sender, debtToCover);
 
         uint256 endingUserHealthFactor = _healthFactor(user);
+
+        //Unlikely would ever happen, but just in case
         if (endingUserHealthFactor <= startingUserHealthFactor) {
             revert BKEngine__HealthFactorNotImproved();
         }
-        _revertIfHealthFactorIsBroken(msg.sender);
+        revertIfHealthFactorIsBroken(msg.sender);
     }
 
-    ////////////////////////
-    // Public functions  ///
+      ////////////////////////
+     // Public functions  ///
     ////////////////////////
 
     /**
@@ -260,7 +307,7 @@ contract BKEngine is ReentrancyGuard {
         _sBkcMinted[msg.sender] += amountBkc;
 
         // If minted too much, revert changes
-        _revertIfHealthFactorIsBroken(msg.sender);
+        revertIfHealthFactorIsBroken(msg.sender);
 
         bool minted = _iBkc.mint(msg.sender, amountBkc);
 
@@ -281,20 +328,12 @@ contract BKEngine is ReentrancyGuard {
     )
         public
         moreThanZero(amountCollateral)
-        isAllowedToken(tokenCollateralAddress)
         nonReentrant
+        isAllowedToken(tokenCollateralAddress)     
     {
-        _sCollateralDeposited[msg.sender][
-            tokenCollateralAddress
-        ] += amountCollateral;
-        emit CollateralDeposited(
-            msg.sender,
-            tokenCollateralAddress,
-            amountCollateral
-        );
-        bool success = IERC20(tokenCollateralAddress).transferFrom(
-            msg.sender,
-            address(this),
+        _sCollateralDeposited[msg.sender][tokenCollateralAddress] += amountCollateral;
+        emit CollateralDeposited(msg.sender,tokenCollateralAddress,amountCollateral);
+        bool success = IERC20(tokenCollateralAddress).transferFrom(msg.sender,address(this),
             amountCollateral
         );
         if (!success) {
@@ -302,11 +341,12 @@ contract BKEngine is ReentrancyGuard {
         }
     }
 
-    function healthCheck() external view {}
+    // function healthCheck() external view {}
 
-    ////////////////////////////////////////
-    // Private and Internal functions    ///
-    ////////////////////////////////////////
+
+      ///////////////////////////
+     // Private functions    ///
+    ///////////////////////////
 
     function _retrieveCollateral(
         address from,
@@ -329,7 +369,9 @@ contract BKEngine is ReentrancyGuard {
         if (!success) {
             revert BKEngine__TransferFailed();
         }
-        _revertIfHealthFactorIsBroken(from);
+
+        //Another check for safety, unlikely to ever happen
+        revertIfHealthFactorIsBroken(from);
     }
 
     /**
@@ -342,23 +384,57 @@ contract BKEngine is ReentrancyGuard {
     ) private moreThanZero(amount) nonReentrant {
         _sBkcMinted[onBehalfOf] -= amount;
         bool success = _iBkc.transferFrom(bkcFrom, address(this), amount);
+
+        //Another check for safety, unlikely to ever happen
         if (!success) {
             revert BKEngine__TransferFailed();
         }
         _iBkc.burn(amount);
 
-        _revertIfHealthFactorIsBroken(msg.sender); // Just for safety, very unlikely would happen,
+        revertIfHealthFactorIsBroken(msg.sender); //Another check for safety, unlikely to ever happen
     }
 
-    function _getAccountInformation(
-        address user
-    )
-        private
+
+      /////////////////////////////////////////////////
+     // Private & Internal View & Pure Functions   ///
+    /////////////////////////////////////////////////
+
+    function _getAccountInformation(address user) 
+        private 
         view
         returns (uint256 totalBkcMinted, uint256 collateralValueInUsd)
     {
         totalBkcMinted = _sBkcMinted[user];
         collateralValueInUsd = getAccountCollateralValue(user);
+    }
+
+    /*
+     * Returns how close to liquidation a user is
+     * If a user's health factor goes below 1, then they can get liquidated
+     */
+    function _healthFactor(address user) private view returns (uint256) {
+        (uint256 totalBkcMinted, uint256 totalCollateralValue) = _getAccountInformation(user);
+        return _calculateHealthFactor(totalBkcMinted, totalCollateralValue);
+    }
+
+    function _getUsdValue(
+        address token,
+        uint256 amount
+    ) private view returns (uint256) {
+        // Using Chainlink AggregatorV3Interface to get price feeds for a token
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(
+            _sPriceFeeds[token]
+        );
+        (, int256 price, , , ) = priceFeed.staleCheckLatestRoundData();
+
+        // 1 ETH = 1000 USD
+        // The returned value from Chainlink will be 1000 * 1e8
+        // Most USD pairs have 8 decimals, so we will just pretend they all do
+        // We want to have everything in terms of WEI, so we add 10 zeros at the end
+        // Hence the formula (price * 1e18) / 1e18 -> for normalization
+
+        return
+            ((uint256(price) * ADDITIONAL_FEED_PRECISION) * amount) / PRECISION;
     }
 
     function _calculateHealthFactor(
@@ -370,7 +446,7 @@ contract BKEngine is ReentrancyGuard {
             return type(uint256).max;
         }
 
-        // Example
+        // Example:
         // total collat value = 1000usd ETH
         // minted = 800 usd BKC
         // collateral floor = 800*150/100 = 1200 usd
@@ -383,51 +459,18 @@ contract BKEngine is ReentrancyGuard {
     }
 
     /*
-     * Returns how close to liquidation a user is
-     * If a user's health factor goes below 1, then they can get liquidated
-     */
-    function _healthFactor(address user) private view returns (uint256) {
-        (
-            uint256 totalBkcMinted,
-            uint256 totalCollateralValue
-        ) = _getAccountInformation(user);
-
-        return _calculateHealthFactor(totalBkcMinted, totalCollateralValue);
-    }
-
-    function _getUsdValue(
-        address token,
-        uint256 amount
-    ) private view returns (uint256) {
-        // Using Chainlink AggregatorV3Interface to get price feeds for a token
-        AggregatorV3Interface priceFeed = AggregatorV3Interface(
-            _sPriceFeeds[token]
-        );
-        (, int256 price, , , ) = priceFeed.latestRoundData();
-
-        // 1 ETH = 1000 USD
-        // The returned value from Chainlink will be 1000 * 1e8
-        // Most USD pairs have 8 decimals, so we will just pretend they all do
-        // We want to have everything in terms of WEI, so we add 10 zeros at the end
-        // Hence the formula (price * 1e18) / 1e18 -> for normalization
-
-        return
-            ((uint256(price) * ADDITIONAL_FEED_PRECISION) * amount) / PRECISION;
-    }
-
-    /*
      * 1. Check if user have enough health factor
      * 2. Revert if doesn't pass check
      */
-    function _revertIfHealthFactorIsBroken(address user) internal view {
+    function revertIfHealthFactorIsBroken(address user) internal view {
         uint256 userHealthFactor = _healthFactor(user);
         if (userHealthFactor < MIN_HEALTH_FACTOR) {
             revert BKEngine__WeakHealthFactor(userHealthFactor);
         }
     }
 
-    ///////////////////////////////////////////////////
-    // Public and External view & Pure functions    ///
+      ///////////////////////////////////////////////////
+     // Public and External view & Pure functions    ///
     ///////////////////////////////////////////////////
 
     function calculateHealthFactor(
@@ -436,7 +479,6 @@ contract BKEngine is ReentrancyGuard {
     ) external pure returns (uint256) {
         return _calculateHealthFactor(totalDscMinted, collateralValueInUsd);
     }
-
 
     function getAccountInformation(
         address user
@@ -448,7 +490,6 @@ contract BKEngine is ReentrancyGuard {
         (totalBkcMinted, collateralValueInUsd) = _getAccountInformation(user);
     }
 
-
     function getUsdValue(
         address token,
         uint256 amount // in WEI
@@ -456,11 +497,12 @@ contract BKEngine is ReentrancyGuard {
         return _getUsdValue(token, amount);
     }
 
-
-    function getCollateralBalanceOfUser(address user, address token) external view returns (uint256) {
+    function getCollateralBalanceOfUser(
+        address user,
+        address token
+    ) external view returns (uint256) {
         return _sCollateralDeposited[user][token];
     }
-
 
     function getAccountCollateralValue(
         address user
@@ -473,22 +515,19 @@ contract BKEngine is ReentrancyGuard {
         return totalCollateralInUsd;
     }
 
+    function getTokenAmountFromUsd(address token, uint256 usdAmountInWei) public view returns (uint256) {
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(_sPriceFeeds[token]);
+        (, int256 price, , , ) = priceFeed.staleCheckLatestRoundData();
 
-    function getTokenAmountFromUsd(
-        address token,
-        uint256 usdAmountInWei
-    ) public view returns (uint256) {
-        AggregatorV3Interface priceFeed = AggregatorV3Interface(
-            _sPriceFeeds[token]
-        );
-        (, int256 price, , , ) = priceFeed.latestRoundData();
+        // $100e18 USD Debt
+        // 1 ETH = 2000 USD
+        // The returned value from Chainlink will be 2000 * 1e8
+        // Most USD pairs have 8 decimals, so we will just pretend they all do
         return
             (usdAmountInWei * PRECISION) /
             (uint256(price) * ADDITIONAL_FEED_PRECISION); // MAKING SURE THINGS ALLIGN WITH THE PRECISION HERE
     }
-    
 
-    // STATUS: DONE
     function getPrecision() external pure returns (uint256) {
         return PRECISION;
     }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.18;
+pragma solidity 0.8.19;
 
 import {Test} from "forge-std/Test.sol";
 import {DeployBKC} from "../../script/DeployBKC.s.sol";
@@ -18,8 +18,8 @@ import { Test, console } from "forge-std/Test.sol";
 import { StdCheats } from "forge-std/StdCheats.sol";
 
 contract BKEngineTest is StdCheats, Test {
-    event CollateralRedeemed(address indexed redeemFrom, address indexed redeemTo, address token, uint256 amount); 
-    // if redeemFrom != redeemedTo, then it was liquidated
+    event CollateralRetrieveed(address indexed RetrieveFrom, address indexed RetrieveTo, address token, uint256 amount); 
+    // if RetrieveFrom != RetrieveedTo, then it was liquidated
 
     BKCoin public bkc;
     BKEngine public bkce;
@@ -33,11 +33,14 @@ contract BKEngineTest is StdCheats, Test {
 
     uint256 public deployerKey;
 
-    address public user = makeAddr("user");
-    uint256 public constant AMOUNT_COLLATERAL = 10 ether;
-    uint256 public constant STARTING_ERC20_BALANCE = 100 ether;
+    uint256 amountCollateral = 10 ether;
+    uint256 amountToMint = 100 ether;
+    address public user = address(1);
+    
+
+    uint256 public constant STARTING_ERC20_BALANCE = 10 ether;
     uint256 public constant MIN_HEALTH_FACTOR = 1e18;
-    uint256 public constant LIQUIDATION_THRESHOLD = 50;
+    uint256 public constant LIQUIDATION_THRESHOLD = 150;
 
     // Liquidation
     address public liquidator = makeAddr("liquidator");
@@ -121,22 +124,22 @@ contract BKEngineTest is StdCheats, Test {
         priceFeedAddress = [ethUsdPriceFeed];
         vm.prank(owner);
         BKEngine mockBkce = new BKEngine(tokenAddress, priceFeedAddress, address(mockBkc));
-        mockBkc.mint(user, AMOUNT_COLLATERAL);
+        mockBkc.mint(user, amountCollateral);
 
         vm.prank(owner);
         mockBkc.transferOwnership(address(mockBkce));
         // Arrange - User
         vm.startPrank(user);
-        ERC20Mock(address(mockBkc)).approve(address(mockBkce), AMOUNT_COLLATERAL);
+        ERC20Mock(address(mockBkc)).approve(address(mockBkce), amountCollateral);
         // Act / Assert
         vm.expectRevert(BKEngine.BKEngine__TransferFailed.selector);
-        mockBkce.depositCollateral(address(mockBkc), AMOUNT_COLLATERAL);
+        mockBkce.depositCollateral(address(mockBkc), amountCollateral);
         vm.stopPrank();
     }
 
     function testRevertsIfCollateralZero() public{
         vm.startPrank(user);
-        ERC20Mock(weth).approve(address(bkce), AMOUNT_COLLATERAL);
+        ERC20Mock(weth).approve(address(bkce), amountCollateral);
 
         vm.expectRevert(BKEngine.BKEngine__NonPostiveRejected.selector);
         bkce.depositCollateral(weth, 0);
@@ -144,17 +147,17 @@ contract BKEngineTest is StdCheats, Test {
     }
 
     function testRevertWithUnapprovedCollateral() public {
-        ERC20Mock ranToken = new ERC20Mock("RAN", "RAN", user, AMOUNT_COLLATERAL);
+        ERC20Mock ranToken = new ERC20Mock("RAN", "RAN", user, amountCollateral);
         vm.startPrank(user);
         vm.expectRevert(BKEngine.BKEngine__NotAllowedToken.selector);
-        bkce.depositCollateral(address(ranToken), AMOUNT_COLLATERAL);
+        bkce.depositCollateral(address(ranToken), amountCollateral);
         vm.stopPrank();
     }
     
     modifier depositedCollateral() {
         vm.startPrank(user);
-        ERC20Mock(weth).approve(address(bkce), AMOUNT_COLLATERAL);
-        bkce.depositCollateral(weth, AMOUNT_COLLATERAL);
+        ERC20Mock(weth).approve(address(bkce), amountCollateral);
+        bkce.depositCollateral(weth, amountCollateral);
         vm.stopPrank();
         _;
     }
@@ -171,7 +174,7 @@ contract BKEngineTest is StdCheats, Test {
         uint256 expectedDepositTotal = bkce.getTokenAmountFromUsd(weth, collateralValueInUsd);
     
         assertEq(totalBkcMinted, expectedTotalBkcMinted);
-        assertEq(AMOUNT_COLLATERAL, expectedDepositTotal);
+        assertEq(amountCollateral, expectedDepositTotal);
     }
 
 
@@ -180,25 +183,23 @@ contract BKEngineTest is StdCheats, Test {
      // depositCollateralAndMintBKC Tests //
     ///////////////////////////////////////
 
-    uint256 amountToMint = 100 ether;
-
     function testRevertsIfMintedDscBreaksHealthFactor() public {
         (, int256 price,,,) = MockV3Aggregator(ethUsdPriceFeed).latestRoundData();
-        amountToMint = (AMOUNT_COLLATERAL * (uint256(price) * bkce.getAdditionalFeedPrecision())) / bkce.getPrecision();
+        amountToMint = (amountCollateral * (uint256(price) * bkce.getAdditionalFeedPrecision())) / bkce.getPrecision();
         vm.startPrank(user);
-        ERC20Mock(weth).approve(address(bkce), AMOUNT_COLLATERAL);
+        ERC20Mock(weth).approve(address(bkce), amountCollateral);
 
         uint256 expectedHealthFactor =
-            bkce.calculateHealthFactor(amountToMint, bkce.getUsdValue(weth, AMOUNT_COLLATERAL));
+            bkce.calculateHealthFactor(amountToMint, bkce.getUsdValue(weth, amountCollateral));
         vm.expectRevert(abi.encodeWithSelector(BKEngine.BKEngine__WeakHealthFactor.selector, expectedHealthFactor));
-        bkce.depositCollateralAndMintBKC(weth, AMOUNT_COLLATERAL, amountToMint);
+        bkce.depositCollateralAndMintBKC(weth, amountCollateral, amountToMint);
         vm.stopPrank();
     }
 
     modifier depositedCollateralAndMintedBkc() {
         vm.startPrank(user);
-        ERC20Mock(weth).approve(address(bkce), AMOUNT_COLLATERAL);
-        bkce.depositCollateralAndMintBKC(weth, AMOUNT_COLLATERAL, amountToMint);
+        ERC20Mock(weth).approve(address(bkce), amountCollateral);
+        bkce.depositCollateralAndMintBKC(weth, amountCollateral, amountToMint);
         vm.stopPrank();
         _;
     }
@@ -227,17 +228,17 @@ contract BKEngineTest is StdCheats, Test {
         mockBkc.transferOwnership(address(mockBkce));
         // Arrange - User
         vm.startPrank(user);
-        ERC20Mock(weth).approve(address(mockBkce), AMOUNT_COLLATERAL);
+        ERC20Mock(weth).approve(address(mockBkce), amountCollateral);
 
         vm.expectRevert(BKEngine.BKEngine__MintFailed.selector);
-        mockBkce.depositCollateralAndMintBKC(weth, AMOUNT_COLLATERAL, amountToMint);
+        mockBkce.depositCollateralAndMintBKC(weth, amountCollateral, amountToMint);
         vm.stopPrank();
     }
 
     function testRevertsIfMintAmountIsZero() public {
         vm.startPrank(user);
-        ERC20Mock(weth).approve(address(bkce), AMOUNT_COLLATERAL);
-        bkce.depositCollateralAndMintBKC(weth, AMOUNT_COLLATERAL, amountToMint);
+        ERC20Mock(weth).approve(address(bkce), amountCollateral);
+        bkce.depositCollateralAndMintBKC(weth, amountCollateral, amountToMint);
         vm.expectRevert(BKEngine.BKEngine__NonPostiveRejected.selector);
         bkce.mintBKC(0);
         vm.stopPrank();
@@ -247,11 +248,11 @@ contract BKEngineTest is StdCheats, Test {
         // 0xe580cc6100000000000000000000000000000000000000000000000006f05b59d3b20000
         // 0xe580cc6100000000000000000000000000000000000000000000003635c9adc5dea00000
         (, int256 price,,,) = MockV3Aggregator(ethUsdPriceFeed).latestRoundData();
-        amountToMint = (AMOUNT_COLLATERAL * (uint256(price) * bkce.getAdditionalFeedPrecision())) / bkce.getPrecision();
+        amountToMint = (amountCollateral * (uint256(price) * bkce.getAdditionalFeedPrecision())) / bkce.getPrecision();
 
         vm.startPrank(user);
         uint256 expectedHealthFactor =
-            bkce.calculateHealthFactor(amountToMint, bkce.getUsdValue(weth, AMOUNT_COLLATERAL));
+            bkce.calculateHealthFactor(amountToMint, bkce.getUsdValue(weth, amountCollateral));
         vm.expectRevert(abi.encodeWithSelector(BKEngine.BKEngine__WeakHealthFactor.selector, expectedHealthFactor));
         bkce.mintBKC(amountToMint);
         vm.stopPrank();
@@ -273,8 +274,8 @@ contract BKEngineTest is StdCheats, Test {
 
     function testRevertsIfBurnAmountIsZero() public {
         vm.startPrank(user);
-        ERC20Mock(weth).approve(address(bkce), AMOUNT_COLLATERAL);
-        bkce.depositCollateralAndMintBKC(weth, AMOUNT_COLLATERAL, amountToMint);
+        ERC20Mock(weth).approve(address(bkce), amountCollateral);
+        bkce.depositCollateralAndMintBKC(weth, amountCollateral, amountToMint);
         vm.expectRevert(BKEngine.BKEngine__NonPostiveRejected.selector);
         bkce.burnBKC(0);
         vm.stopPrank();
@@ -286,7 +287,7 @@ contract BKEngineTest is StdCheats, Test {
         bkce.burnBKC(1);
     }
 
-    function testCanBurnDsc() public depositedCollateralAndMintedBkc {
+    function testCanBurnBkc() public depositedCollateralAndMintedBkc {
         vm.startPrank(user);
         bkc.approve(address(bkce), amountToMint);
         bkce.burnBKC(amountToMint);
@@ -312,42 +313,42 @@ contract BKEngineTest is StdCheats, Test {
         priceFeedAddress = [ethUsdPriceFeed];
         vm.prank(owner);
         BKEngine mockBkce = new BKEngine(tokenAddress, priceFeedAddress, address(mockBkc));
-        mockBkc.mint(user, AMOUNT_COLLATERAL);
+        mockBkc.mint(user, amountCollateral);
 
         vm.prank(owner);
         mockBkc.transferOwnership(address(mockBkce));
         // Arrange - User
         vm.startPrank(user);
-        ERC20Mock(address(mockBkc)).approve(address(mockBkce), AMOUNT_COLLATERAL);
+        ERC20Mock(address(mockBkc)).approve(address(mockBkce), amountCollateral);
         // Act / Assert
-        mockBkce.depositCollateral(address(mockBkc), AMOUNT_COLLATERAL);
+        mockBkce.depositCollateral(address(mockBkc), amountCollateral);
         vm.expectRevert(BKEngine.BKEngine__TransferFailed.selector);
-        mockBkce.retrieveCollateral(address(mockBkc), AMOUNT_COLLATERAL);
+        mockBkce.retrieveCollateral(address(mockBkc), amountCollateral);
         vm.stopPrank();
     }
 
-    function testRevertsIfRedeemAmountIsZero() public {
+    function testRevertsIfRetrieveAmountIsZero() public {
         vm.startPrank(user);
-        ERC20Mock(weth).approve(address(bkce), AMOUNT_COLLATERAL);
-        bkce.depositCollateralAndMintBKC(weth, AMOUNT_COLLATERAL, amountToMint);
+        ERC20Mock(weth).approve(address(bkce), amountCollateral);
+        bkce.depositCollateralAndMintBKC(weth, amountCollateral, amountToMint);
         vm.expectRevert(BKEngine.BKEngine__NonPostiveRejected.selector);
         bkce.retrieveCollateral(weth, 0);
         vm.stopPrank();
     }
 
-    function testCanRedeemCollateral() public depositedCollateral {
+    function testCanRetrieveCollateral() public depositedCollateral {
         vm.startPrank(user);
-        bkce.retrieveCollateral(weth, AMOUNT_COLLATERAL);
+        bkce.retrieveCollateral(weth, amountCollateral);
         uint256 userBalance = ERC20Mock(weth).balanceOf(user);
-        assertEq(userBalance, AMOUNT_COLLATERAL);
+        assertEq(userBalance, amountCollateral);
         vm.stopPrank();
     }
 
-    function testEmitCollateralRedeemedWithCorrectArgs() public depositedCollateral {
+    function testEmitCollateralRetrievedWithCorrectArgs() public depositedCollateral {
         vm.expectEmit(true, true, true, true, address(bkce));
-        emit CollateralRedeemed(user, user, weth, AMOUNT_COLLATERAL);
+        emit CollateralRetrieveed(user, user, weth, amountCollateral);
         vm.startPrank(user);
-        bkce.retrieveCollateral(weth, AMOUNT_COLLATERAL);
+        bkce.retrieveCollateral(weth, amountCollateral);
         vm.stopPrank();
     }
 
@@ -357,7 +358,7 @@ contract BKEngineTest is StdCheats, Test {
      // retrieveCollateralForBKC Tests //
     ////////////////////////////////////
 
-    function testMustRedeemMoreThanZero() public depositedCollateralAndMintedBkc {
+    function testMustRetrieveMoreThanZero() public depositedCollateralAndMintedBkc {
         vm.startPrank(user);
         bkc.approve(address(bkce), amountToMint);
         vm.expectRevert(BKEngine.BKEngine__NonPostiveRejected.selector);
@@ -365,12 +366,12 @@ contract BKEngineTest is StdCheats, Test {
         vm.stopPrank();
     }
 
-    function testCanRedeemDepositedCollateral() public {
+    function testCanRetrieveDepositedCollateral() public {
         vm.startPrank(user);
-        ERC20Mock(weth).approve(address(bkce), AMOUNT_COLLATERAL);
-        bkce.depositCollateralAndMintBKC(weth, AMOUNT_COLLATERAL, amountToMint);
+        ERC20Mock(weth).approve(address(bkce), amountCollateral);
+        bkce.depositCollateralAndMintBKC(weth, amountCollateral, amountToMint);
         bkc.approve(address(bkce), amountToMint);
-        bkce.retrieveCollateralForBKC(weth, AMOUNT_COLLATERAL, amountToMint);
+        bkce.retrieveCollateralForBKC(weth, amountCollateral, amountToMint);
         vm.stopPrank();
 
         uint256 userBalance = bkc.balanceOf(user);
@@ -423,8 +424,8 @@ contract BKEngineTest is StdCheats, Test {
         mockDsc.transferOwnership(address(mockDsce));
         // Arrange - User
         vm.startPrank(user);
-        ERC20Mock(weth).approve(address(mockDsce), AMOUNT_COLLATERAL);
-        mockDsce.depositCollateralAndMintBKC(weth, AMOUNT_COLLATERAL, amountToMint);
+        ERC20Mock(weth).approve(address(mockDsce), amountCollateral);
+        mockDsce.depositCollateralAndMintBKC(weth, amountCollateral, amountToMint);
         vm.stopPrank();
 
         // Arrange - Liquidator
@@ -460,8 +461,8 @@ contract BKEngineTest is StdCheats, Test {
 
     modifier liquidated() {
         vm.startPrank(user);
-        ERC20Mock(weth).approve(address(bkce), AMOUNT_COLLATERAL);
-        bkce.depositCollateralAndMintBKC(weth, AMOUNT_COLLATERAL, amountToMint);
+        ERC20Mock(weth).approve(address(bkce), amountCollateral);
+        bkce.depositCollateralAndMintBKC(weth, amountCollateral, amountToMint);
         vm.stopPrank();
         int256 ethUsdUpdatedPrice = 18e8; // 1 ETH = $18
 
@@ -494,7 +495,7 @@ contract BKEngineTest is StdCheats, Test {
             + (bkce.getTokenAmountFromUsd(weth, amountToMint) / bkce.getLiquidationBonus());
 
         uint256 usdAmountLiquidated = bkce.getUsdValue(weth, amountLiquidated);
-        uint256 expectedUserCollateralValueInUsd = bkce.getUsdValue(weth, AMOUNT_COLLATERAL) - (usdAmountLiquidated);
+        uint256 expectedUserCollateralValueInUsd = bkce.getUsdValue(weth, amountCollateral) - (usdAmountLiquidated);
 
         (, uint256 userCollateralValueInUsd) = bkce.getAccountInformation(user);
         uint256 hardCodedExpectedValue = 70_000_000_000_000_000_020;
@@ -540,26 +541,26 @@ contract BKEngineTest is StdCheats, Test {
 
     function testGetAccountCollateralValueFromInformation() public depositedCollateral {
         (, uint256 collateralValue) = bkce.getAccountInformation(user);
-        uint256 expectedCollateralValue = bkce.getUsdValue(weth, AMOUNT_COLLATERAL);
+        uint256 expectedCollateralValue = bkce.getUsdValue(weth, amountCollateral);
         assertEq(collateralValue, expectedCollateralValue);
     }
 
     function testGetCollateralBalanceOfUser() public {
         vm.startPrank(user);
-        ERC20Mock(weth).approve(address(bkce), AMOUNT_COLLATERAL);
-        bkce.depositCollateral(weth, AMOUNT_COLLATERAL);
+        ERC20Mock(weth).approve(address(bkce), amountCollateral);
+        bkce.depositCollateral(weth, amountCollateral);
         vm.stopPrank();
         uint256 collateralBalance = bkce.getCollateralBalanceOfUser(user, weth);
-        assertEq(collateralBalance, AMOUNT_COLLATERAL);
+        assertEq(collateralBalance, amountCollateral);
     }
 
     function testGetAccountCollateralValue() public {
         vm.startPrank(user);
-        ERC20Mock(weth).approve(address(bkce), AMOUNT_COLLATERAL);
-        bkce.depositCollateral(weth, AMOUNT_COLLATERAL);
+        ERC20Mock(weth).approve(address(bkce), amountCollateral);
+        bkce.depositCollateral(weth, amountCollateral);
         vm.stopPrank();
         uint256 collateralValue = bkce.getAccountCollateralValue(user);
-        uint256 expectedCollateralValue = bkce.getUsdValue(weth, AMOUNT_COLLATERAL);
+        uint256 expectedCollateralValue = bkce.getUsdValue(weth, amountCollateral);
         assertEq(collateralValue, expectedCollateralValue);
     }
 
