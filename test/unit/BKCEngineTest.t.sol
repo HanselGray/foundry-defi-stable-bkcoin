@@ -10,8 +10,8 @@ import {HelperConfig} from "../../script/HelperConfig.s.sol";
 // import {ERC20Mock} from "@openzeppelin/contracts/mocks/ERC20Mock.sol";
 import { ERC20Mock } from "../mocks/ERC20Mock.sol";
 import { MockV3Aggregator } from "../mocks/MockV3Aggregator.sol";
-import { MockMoreDebtDSC } from "../mocks/MockMoreDebtDSC.sol";
-import { MockFailedMintDSC } from "../mocks/MockFailedMintDSC.sol";
+import { MockMoreDebtBKC } from "../mocks/MockMoreDebtBKC.sol";
+import { MockFailedMintBKC } from "../mocks/MockFailedMintBKC.sol";
 import { MockFailedTransferFrom } from "../mocks/MockFailedTransferFrom.sol";
 import { MockFailedTransfer } from "../mocks/MockFailedTransfer.sol";
 import { Test, console } from "forge-std/Test.sol";
@@ -218,7 +218,7 @@ contract BKEngineTest is StdCheats, Test {
     // This test needs it's own custom setup
     function testRevertsIfMintFails() public {
         // Arrange - Setup
-        MockFailedMintDSC mockBkc = new MockFailedMintDSC();
+        MockFailedMintBKC mockBkc = new MockFailedMintBKC();
         tokenAddress = [weth];
         priceFeedAddress = [ethUsdPriceFeed];
         address owner = msg.sender;
@@ -414,7 +414,7 @@ contract BKEngineTest is StdCheats, Test {
     // This test needs it's own setup
     function testMustImproveHealthFactorOnLiquidation() public {
         // Arrange - Setup
-        MockMoreDebtDSC mockDsc = new MockMoreDebtDSC(ethUsdPriceFeed);
+        MockMoreDebtBKC mockDsc = new MockMoreDebtBKC(ethUsdPriceFeed);
         tokenAddress = [weth];
         priceFeedAddress = [ethUsdPriceFeed];
         address owner = msg.sender;
@@ -568,7 +568,7 @@ contract BKEngineTest is StdCheats, Test {
         assertEq(bkcAddress, address(bkc));
     }
 
-    function testLiquidationPrecision() public view{
+    function testLiquidationPrecision() public {
         uint256 expectedLiquidationPrecision = 100;
         uint256 actualLiquidationPrecision = bkce.getLiquidationPrecision();
         assertEq(actualLiquidationPrecision, expectedLiquidationPrecision);
