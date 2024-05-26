@@ -50,11 +50,8 @@ import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/Ag
  */
 
 contract BKEngine is ReentrancyGuard {
-
-
-
-      ///////////////////
-     // Errors       ///
+    ///////////////////
+    // Errors       ///
     ///////////////////
 
     error BKEngine__NonPostiveRejected();
@@ -66,10 +63,8 @@ contract BKEngine is ReentrancyGuard {
     error BKEngine__GoodHealthFactor();
     error BKEngine__HealthFactorNotImproved();
 
-
-
-      /////////////////////////
-     // State variables    ///
+    /////////////////////////
+    // State variables    ///
     /////////////////////////
 
     uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;
@@ -80,16 +75,15 @@ contract BKEngine is ReentrancyGuard {
     uint256 private constant MIN_HEALTH_FACTOR = 1;
 
     mapping(address token => address priceFeed) private _sPriceFeeds;
-    mapping(address user => mapping(address token => uint256 amount)) private _sCollateralDeposited;
+    mapping(address user => mapping(address token => uint256 amount))
+        private _sCollateralDeposited;
     mapping(address user => uint256 amountBkcMinted) private _sBkcMinted;
 
     address[] private _sCollateralTokens;
     BKCoin private immutable _iBkc;
 
-
-
-      ///////////////////
-     // Events       ///
+    ///////////////////
+    // Events       ///
     ///////////////////
 
     event CollateralDeposited(
@@ -103,8 +97,6 @@ contract BKEngine is ReentrancyGuard {
         address indexed token,
         uint256 amount
     );
-
-
 
     ///////////////////
     // Modifiers    ///
@@ -123,8 +115,8 @@ contract BKEngine is ReentrancyGuard {
         _;
     }
 
-      ///////////////////
-     // Functions    ///
+    ///////////////////
+    // Functions    ///
     ///////////////////
 
     constructor(
@@ -144,10 +136,8 @@ contract BKEngine is ReentrancyGuard {
         _iBkc = BKCoin(bkcAddress);
     }
 
-
-
-      ////////////////////////////
-     // External functions    ///
+    ////////////////////////////
+    // External functions    ///
     ////////////////////////////
 
     /**
@@ -186,7 +176,12 @@ contract BKEngine is ReentrancyGuard {
         uint256 amountBkcToBurn
     ) external {
         burnBKC(amountBkcToBurn);
-        _retrieveCollateral(msg.sender,msg.sender, tokenCollateralAddress,amountCollateral);
+        _retrieveCollateral(
+            msg.sender,
+            msg.sender,
+            tokenCollateralAddress,
+            amountCollateral
+        );
         // redeemCollateral already checks health factor
     }
 
@@ -250,22 +245,9 @@ contract BKEngine is ReentrancyGuard {
         _revertIfHealthFactorIsBroken(msg.sender);
     }
 
-      //////////////////////// 
-     // Public functions  ///
     ////////////////////////
-
-    function getTokenAmountFromUsd(
-        address token,
-        uint256 usdAmountInWei
-    ) public view returns (uint256) {
-        AggregatorV3Interface priceFeed = AggregatorV3Interface(
-            _sPriceFeeds[token]
-        );
-        (, int256 price, , , ) = priceFeed.latestRoundData();
-        return
-            (usdAmountInWei * PRECISION) /
-            (uint256(price) * ADDITIONAL_FEED_PRECISION); // MAKING SURE THINGS ALLIGN WITH THE PRECISION HERE
-    }
+    // Public functions  ///
+    ////////////////////////
 
     /**
      * @notice follows CEI: Checks -> Effects -> Interactions
@@ -322,10 +304,8 @@ contract BKEngine is ReentrancyGuard {
 
     function healthCheck() external view {}
 
-
-
-      ////////////////////////////////////////
-     // Private and Internal functions    ///
+    ////////////////////////////////////////
+    // Private and Internal functions    ///
     ////////////////////////////////////////
 
     function _retrieveCollateral(
@@ -381,6 +361,27 @@ contract BKEngine is ReentrancyGuard {
         collateralValueInUsd = getAccountCollateralValue(user);
     }
 
+    function _calculateHealthFactor(
+        uint256 totalBkcMinted,
+        uint256 totalCollateralValue
+    ) internal pure returns (uint256) {
+        // If never minted -> Health always good
+        if (totalBkcMinted == 0) {
+            return type(uint256).max;
+        }
+
+        // Example
+        // total collat value = 1000usd ETH
+        // minted = 800 usd BKC
+        // collateral floor = 800*150/100 = 1200 usd
+        // healthFactor = (1000 / 1200) < 1 => UNDER-COLLATERALIZED, can be liquidate
+
+        uint256 collateralThresholdFloor = (totalBkcMinted *
+            LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+
+        return (totalCollateralValue * PRECISION) / collateralThresholdFloor;
+    }
+
     /*
      * Returns how close to liquidation a user is
      * If a user's health factor goes below 1, then they can get liquidated
@@ -391,16 +392,27 @@ contract BKEngine is ReentrancyGuard {
             uint256 totalCollateralValue
         ) = _getAccountInformation(user);
 
-        uint256 collateralThresholdFloor = (totalBkcMinted *
-            LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+        return _calculateHealthFactor(totalBkcMinted, totalCollateralValue);
+    }
 
-        // Example
-        // total collat value = 1000usd ETH
-        // minted = 800 usd BKC
-        // collateral floor = 800*150/100 = 1200 usd
-        // healthFactor = (1000 / 1200) < 1 => UNDER-COLLATERALIZED, can be liquidate
+    function _getUsdValue(
+        address token,
+        uint256 amount
+    ) private view returns (uint256) {
+        // Using Chainlink AggregatorV3Interface to get price feeds for a token
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(
+            _sPriceFeeds[token]
+        );
+        (, int256 price, , , ) = priceFeed.latestRoundData();
 
-        return (totalCollateralValue * PRECISION) / collateralThresholdFloor;
+        // 1 ETH = 1000 USD
+        // The returned value from Chainlink will be 1000 * 1e8
+        // Most USD pairs have 8 decimals, so we will just pretend they all do
+        // We want to have everything in terms of WEI, so we add 10 zeros at the end
+        // Hence the formula (price * 1e18) / 1e18 -> for normalization
+
+        return
+            ((uint256(price) * ADDITIONAL_FEED_PRECISION) * amount) / PRECISION;
     }
 
     /*
@@ -414,11 +426,41 @@ contract BKEngine is ReentrancyGuard {
         }
     }
 
+    ///////////////////////////////////////////////////
+    // Public and External view & Pure functions    ///
+    ///////////////////////////////////////////////////
+
+    function calculateHealthFactor(
+        uint256 totalDscMinted,
+        uint256 collateralValueInUsd
+    ) external pure returns (uint256) {
+        return _calculateHealthFactor(totalDscMinted, collateralValueInUsd);
+    }
 
 
-      ////////////////////////////////////////////
-     // Public and External view functions    ///
-    ////////////////////////////////////////////
+    function getAccountInformation(
+        address user
+    )
+        external
+        view
+        returns (uint256 totalBkcMinted, uint256 collateralValueInUsd)
+    {
+        (totalBkcMinted, collateralValueInUsd) = _getAccountInformation(user);
+    }
+
+
+    function getUsdValue(
+        address token,
+        uint256 amount // in WEI
+    ) external view returns (uint256) {
+        return _getUsdValue(token, amount);
+    }
+
+
+    function getCollateralBalanceOfUser(address user, address token) external view returns (uint256) {
+        return _sCollateralDeposited[user][token];
+    }
+
 
     function getAccountCollateralValue(
         address user
@@ -426,22 +468,66 @@ contract BKEngine is ReentrancyGuard {
         for (uint256 i = 0; i < _sCollateralTokens.length; ++i) {
             address token = _sCollateralTokens[i];
             uint256 amount = _sCollateralDeposited[user][token];
-            totalCollateralInUsd += getUsdValue(token, amount);
+            totalCollateralInUsd += _getUsdValue(token, amount);
         }
         return totalCollateralInUsd;
     }
 
-    function getUsdValue(
+
+    function getTokenAmountFromUsd(
         address token,
-        uint256 amount
+        uint256 usdAmountInWei
     ) public view returns (uint256) {
-        // Using Chainlink AggregatorV3Interface to get price feeds for a token
         AggregatorV3Interface priceFeed = AggregatorV3Interface(
             _sPriceFeeds[token]
         );
         (, int256 price, , , ) = priceFeed.latestRoundData();
-
         return
-            ((uint256(price) * ADDITIONAL_FEED_PRECISION) * amount) / PRECISION; // (price * 1e18) / 1e18 -> for normalization    }
+            (usdAmountInWei * PRECISION) /
+            (uint256(price) * ADDITIONAL_FEED_PRECISION); // MAKING SURE THINGS ALLIGN WITH THE PRECISION HERE
+    }
+    
+
+    // STATUS: DONE
+    function getPrecision() external pure returns (uint256) {
+        return PRECISION;
+    }
+
+    function getAdditionalFeedPrecision() external pure returns (uint256) {
+        return ADDITIONAL_FEED_PRECISION;
+    }
+
+    function getLiquidationThreshold() external pure returns (uint256) {
+        return LIQUIDATION_THRESHOLD;
+    }
+
+    function getLiquidationBonus() external pure returns (uint256) {
+        return LIQUIDATION_BONUS;
+    }
+
+    function getLiquidationPrecision() external pure returns (uint256) {
+        return LIQUIDATION_PRECISION;
+    }
+
+    function getMinHealthFactor() external pure returns (uint256) {
+        return MIN_HEALTH_FACTOR;
+    }
+
+    function getCollateralTokens() external view returns (address[] memory) {
+        return _sCollateralTokens;
+    }
+
+    function getDsc() external view returns (address) {
+        return address(_iBkc);
+    }
+
+    function getCollateralTokenPriceFeed(
+        address token
+    ) external view returns (address) {
+        return _sPriceFeeds[token];
+    }
+
+    function getHealthFactor(address user) external view returns (uint256) {
+        return _healthFactor(user);
     }
 }
