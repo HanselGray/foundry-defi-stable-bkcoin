@@ -55,8 +55,8 @@ contract BKEngine is ReentrancyGuard {
     // Errors       ///
     ///////////////////
 
-    error BKEngine__NonPostiveRejected();
     error BKEngine__TokenAddressAndPriceFeedAddressMustBeSameLength();
+    error BKEngine__NonPostiveRejected();
     error BKEngine__NotAllowedToken(address token);
     error BKEngine__TransferFailed();
     error BKEngine__WeakHealthFactor(uint256 healthFactor);
@@ -78,7 +78,7 @@ contract BKEngine is ReentrancyGuard {
 
     uint256 private constant LIQUIDATION_THRESHOLD = 150;
     uint256 private constant LIQUIDATION_PRECISION = 100;
-    uint256 private constant LIQUIDATION_BONUS = 10;
+    uint256 private constant LIQUIDATION_BONUS = 10; //10% bonus when liquidate someone else's debt
 
     uint256 private constant MIN_HEALTH_FACTOR = 1e18;
 
@@ -148,7 +148,7 @@ contract BKEngine is ReentrancyGuard {
             revert BKEngine__TokenAddressAndPriceFeedAddressMustBeSameLength();
         }
         // USD Price Feed check
-        for (uint256 i = 0; i < tokenAddress.length; ++i) {
+        for (uint256 i = 0; i < tokenAddress.length; i++) {
             _sPriceFeeds[tokenAddress[i]] = priceFeedAddress[i];
             _sCollateralTokens.push(tokenAddress[i]);
         }
@@ -198,7 +198,6 @@ contract BKEngine is ReentrancyGuard {
             tokenCollateralAddress,
             amountCollateral
         );
-        // redeemCollateral already checks health factor
     }
 
     /** 
@@ -353,7 +352,7 @@ contract BKEngine is ReentrancyGuard {
         address to,
         address tokenCollateralAddress,
         uint256 amountCollateral
-    ) private moreThanZero(amountCollateral) nonReentrant {
+    ) private {
         _sCollateralDeposited[from][tokenCollateralAddress] -= amountCollateral;
         emit CollateralRedeemed(
             from,
@@ -381,7 +380,7 @@ contract BKEngine is ReentrancyGuard {
         address onBehalfOf,
         address bkcFrom,
         uint256 amount
-    ) private moreThanZero(amount) nonReentrant {
+    ) private {
         _sBkcMinted[onBehalfOf] -= amount;
         bool success = _iBkc.transferFrom(bkcFrom, address(this), amount);
 
