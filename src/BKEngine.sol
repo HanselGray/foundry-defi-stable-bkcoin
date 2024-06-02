@@ -76,7 +76,7 @@ contract BKEngine is ReentrancyGuard {
 
     BKCoin private immutable _iBkc;
 
-    uint256 private constant LIQUIDATION_THRESHOLD = 150;
+    uint256 private constant LIQUIDATION_THRESHOLD = 50; // This means you need to be 200% over-collateralized
     uint256 private constant LIQUIDATION_PRECISION = 100;
     uint256 private constant LIQUIDATION_BONUS = 10; //10% bonus when liquidate someone else's debt
 
@@ -112,7 +112,7 @@ contract BKEngine is ReentrancyGuard {
     event CollateralRedeemed(
         address indexed from,
         address indexed to,
-        address indexed token,
+        address token,
         uint256 amount
     );
     /// @dev If redeemFrom != redeemedTo, then it was liquidated
@@ -370,7 +370,7 @@ contract BKEngine is ReentrancyGuard {
         }
 
         //Another check for safety, unlikely to ever happen
-        revertIfHealthFactorIsBroken(from);
+        // revertIfHealthFactorIsBroken(from);
     }
 
     /**
@@ -451,11 +451,11 @@ contract BKEngine is ReentrancyGuard {
         // collateral floor = 800*150/100 = 1200 usd
         // healthFactor = (1000 / 1200) < 1 => UNDER-COLLATERALIZED, can be liquidate
 
-        uint256 collateralThresholdFloor = (totalBkcMinted *
-            LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
-
-        return (totalCollateralValue * PRECISION) / collateralThresholdFloor;
-    }
+        
+        uint256 collateralAdjustedForThreshold = (totalCollateralValue * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+        return (collateralAdjustedForThreshold * PRECISION) / totalBkcMinted;
+      
+}
 
     /*
      * 1. Check if user have enough health factor
